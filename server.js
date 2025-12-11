@@ -2,7 +2,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import axios from "axios";
+//import Groq from "groq-sdk";
 
 dotenv.config();
 
@@ -10,59 +10,60 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// NEW Hugging Face Router endpoint (correct!)
-const HF_URL = "https://router.huggingface.co/hf-inference/google/gemma-2-9b-it";
+//const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// ---------------- STORY GENERATION ----------------
+// ----------- AI STORY GENERATOR API --------------
 app.post("/api/generate-story", async (req, res) => {
   try {
     const { character, storyType, ageGroup, language } = req.body;
 
     const safeLanguage = language || "English";
 
+    console.log("LANG RECEIVED:", safeLanguage); // debugging
+
     const prompt = `
-Write a children's story in **${safeLanguage}** only.
+You are a multilingual children's story writer.
+
+Write the ENTIRE story ONLY in ${safeLanguage}.  
+Do NOT include English unless ${safeLanguage} is English.  
 
 Story Requirements:
-• Main character: ${character}
-• Story type: ${storyType}
-• Target audience: ${ageGroup}
-• Story must be 100% in ${safeLanguage} (NO English if ${safeLanguage} ≠ English)
-• 6–8 paragraphs
-• Emotional, imaginative, smooth flow.
+- Story Type: ${storyType}
+- Audience: ${ageGroup}
+- Main Character: ${character}
 
-Begin story:
+Rules:
+- The ENTIRE OUTPUT MUST BE IN ${safeLanguage}.
+- No translations, no explanations, only the final story.
+- Use native-level ${safeLanguage} vocabulary.
+- 5–7 short paragraphs.
+
+Now write the story:
 `;
 
-    const response = await axios.post(
-      HF_URL,
-      { inputs: prompt },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.HF_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const response = await client.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.8,
+      max_tokens: 900,
+    });
 
-    let story =
-      response.data?.generated_text ||
-      (Array.isArray(response.data) && response.data[0]?.generated_text) ||
-      "Story could not be generated.";
+    const story = response.choices?.[0]?.message?.content?.trim();
 
     res.json({ story });
   } catch (err) {
-    console.error("HF Story Error:", err.response?.data || err.message);
+    console.error("AI Error:", err);
     res.status(500).json({ error: "Story generation failed" });
   }
 });
 
-// ---------------- ROOT ----------------
+
+// ------------------------------------
+
 app.get("/", (req, res) => {
-  res.send("StoryGenie Backend Running (Hugging Face Gemma 2-9B)");
+  res.send("StoryGenie Backend Running");
 });
 
-// ---------------- START SERVER ----------------
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
   console.log(`Server running on http://localhost:${PORT}`)
