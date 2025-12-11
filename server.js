@@ -10,8 +10,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Hugging Face endpoint
-const HF_URL = "https://api-inference.huggingface.co/models/google/gemma-2b-it";
+// Hugging Face NEW Router Endpoint
+const HF_URL = "https://router.huggingface.co/hf-inference/models/google/gemma-2b-it";
 
 // ---------------- STORY GENERATION ----------------
 app.post("/api/generate-story", async (req, res) => {
@@ -24,21 +24,19 @@ app.post("/api/generate-story", async (req, res) => {
 Write a children's story in **${safeLanguage}** only.
 
 Story Requirements:
-- Main character: ${character}
-- Story type: ${storyType}
-- Target audience: ${ageGroup}
-- Fully in ${safeLanguage} (no English unless ${safeLanguage} is English)
-- 6–8 short paragraphs
-- Emotional, imaginative, smooth storytelling.
+• Main character: ${character}
+• Story type: ${storyType}
+• Target audience: ${ageGroup}
+• Story must be 100% in ${safeLanguage} (NO English if ${safeLanguage} ≠ English)
+• 6–8 paragraphs
+• Emotional, imaginative, smooth flow.
 
-Begin:
+Begin story:
 `;
 
     const response = await axios.post(
       HF_URL,
-      { 
-        inputs: prompt 
-      },
+      { inputs: prompt },
       {
         headers: {
           "Authorization": `Bearer ${process.env.HF_API_KEY}`,
@@ -47,10 +45,14 @@ Begin:
       }
     );
 
-    // Hugging Face returns array format text
-    const story = response.data?.generated_text || 
-                  response.data?.[0]?.generated_text || 
-                  "Story could not be generated.";
+    let story = "Story not generated.";
+
+    // Hugging Face output formats vary, so check all possibilities
+    if (response.data?.generated_text) {
+      story = response.data.generated_text;
+    } else if (Array.isArray(response.data) && response.data[0]?.generated_text) {
+      story = response.data[0].generated_text;
+    }
 
     res.json({ story });
   } catch (err) {
@@ -61,7 +63,7 @@ Begin:
 
 // ---------------- ROOT ----------------
 app.get("/", (req, res) => {
-  res.send("StoryGenie Backend Running (Hugging Face Gemma 2B)");
+  res.send("StoryGenie Backend Running (Hugging Face Gemma 2B - New Router)");
 });
 
 // ---------------- START SERVER ----------------
