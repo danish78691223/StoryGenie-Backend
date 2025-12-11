@@ -10,8 +10,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Hugging Face NEW Router Endpoint
-const HF_URL = "https://router.huggingface.co/hf-inference/models/google/gemma-2b-it";
+// NEW Hugging Face Router endpoint (correct!)
+const HF_URL = "https://router.huggingface.co/hf-inference/google/gemma-2-9b-it";
 
 // ---------------- STORY GENERATION ----------------
 app.post("/api/generate-story", async (req, res) => {
@@ -39,20 +39,16 @@ Begin story:
       { inputs: prompt },
       {
         headers: {
-          "Authorization": `Bearer ${process.env.HF_API_KEY}`,
+          Authorization: `Bearer ${process.env.HF_API_KEY}`,
           "Content-Type": "application/json",
         },
       }
     );
 
-    let story = "Story not generated.";
-
-    // Hugging Face output formats vary, so check all possibilities
-    if (response.data?.generated_text) {
-      story = response.data.generated_text;
-    } else if (Array.isArray(response.data) && response.data[0]?.generated_text) {
-      story = response.data[0].generated_text;
-    }
+    let story =
+      response.data?.generated_text ||
+      (Array.isArray(response.data) && response.data[0]?.generated_text) ||
+      "Story could not be generated.";
 
     res.json({ story });
   } catch (err) {
@@ -63,7 +59,7 @@ Begin story:
 
 // ---------------- ROOT ----------------
 app.get("/", (req, res) => {
-  res.send("StoryGenie Backend Running (Hugging Face Gemma 2B - New Router)");
+  res.send("StoryGenie Backend Running (Hugging Face Gemma 2-9B)");
 });
 
 // ---------------- START SERVER ----------------
