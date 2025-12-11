@@ -2,7 +2,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+//import Groq from "groq-sdk";
 
 dotenv.config();
 
@@ -10,48 +10,58 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ---------------- GEMINI CLIENT ----------------
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+//const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// ---------------- STORY GENERATION API ----------------
+// ----------- AI STORY GENERATOR API --------------
 app.post("/api/generate-story", async (req, res) => {
   try {
     const { character, storyType, ageGroup, language } = req.body;
 
     const safeLanguage = language || "English";
 
+    console.log("LANG RECEIVED:", safeLanguage); // debugging
+
     const prompt = `
-Write a complete children's story in **${safeLanguage}** only.
+You are a multilingual children's story writer.
+
+Write the ENTIRE story ONLY in ${safeLanguage}.  
+Do NOT include English unless ${safeLanguage} is English.  
 
 Story Requirements:
-- Main character: ${character}
-- Story type: ${storyType}
-- Age group: ${ageGroup}
-- Use cultural tone suitable for ${safeLanguage}
-- Output MUST be ONLY in ${safeLanguage}
-- No English if ${safeLanguage} is not English
-- Length: 6–8 short paragraphs
-- Smooth storytelling, emotional and engaging.
+- Story Type: ${storyType}
+- Audience: ${ageGroup}
+- Main Character: ${character}
 
-Begin the story now:
+Rules:
+- The ENTIRE OUTPUT MUST BE IN ${safeLanguage}.
+- No translations, no explanations, only the final story.
+- Use native-level ${safeLanguage} vocabulary.
+- 5–7 short paragraphs.
+
+Now write the story:
 `;
 
-    // ---------------- CALL GEMINI ----------------
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const response = await client.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.8,
+      max_tokens: 900,
+    });
 
-    const result = await model.generateContent(prompt);
-    const story = result.response.text();
+    const story = response.choices?.[0]?.message?.content?.trim();
 
     res.json({ story });
   } catch (err) {
-    console.error("Gemini Error:", err);
+    console.error("AI Error:", err);
     res.status(500).json({ error: "Story generation failed" });
   }
 });
 
-// -------------------------------------------------------
+
+// ------------------------------------
+
 app.get("/", (req, res) => {
-  res.send("StoryGenie Backend Running (Gemini 2.0 Flash)");
+  res.send("StoryGenie Backend Running");
 });
 
 const PORT = process.env.PORT || 5000;
