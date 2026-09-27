@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
 
@@ -10,41 +9,34 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
+const STORY_MODEL = process.env.GEMINI_STORY_MODEL || "gemini-3.5-flash";
+const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
 
-const storySchema = {
-  type: Type.OBJECT,
-  properties: {
-    title: { type: Type.STRING },
-    styleGuide: { type: Type.STRING },
-    characters: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          name: { type: Type.STRING },
-          appearance: { type: Type.STRING },
-          personality: { type: Type.STRING }
-        },
-        required: ["name", "appearance", "personality"]
-      }
-    },
-    paragraphs: {
-      type: Type.ARRAY,
-      minItems: 5,
-      maxItems: 8,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          text: { type: Type.STRING },
-          imagePrompt: { type: Type.STRING }
-        },
-        required: ["text", "imagePrompt"]
-      }
+async function callGemini(model, body) {
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured.");
+
+  const response = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/models/" +
+      model +
+      ":generateContent?key=" +
+      encodeURIComponent(GEMINI_API_KEY),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
     }
-  },
-  required: ["title", "styleGuide", "characters", "paragraphs"]
-};
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error?.message || "Gemini API request failed (" + response.status + ")."
+    );
+  }
+
+  return data;
+}
 
 function buildStoryPrompt(input) {
   return [
@@ -61,35 +53,76 @@ function buildStoryPrompt(input) {
     "- Include dialogue, sensory details, suspense or humor where appropriate.",
     "- Make the ending satisfying and age-appropriate.",
     "- Use only the requested story language for story text.",
-    "- Return structured JSON only.",
+    "- Return JSON matching the requested schema.",
     "- Every paragraph needs an imagePrompt describing exactly what should be illustrated.",
     "- Image prompts must be visual, cinematic, child-friendly, and contain no written text.",
     "- Keep recurring characters visually consistent using stable appearance descriptions.",
-    "- styleGuide should define one consistent storybook art direction."
+    "- styleGuide must define one consistent storybook art direction."
   ].join("\\n");
 }
 
-async function generateStoryWithGemini(input) {
-  if (!ai) throw new Error("Gemini is not configured.");
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3.5-flash",
-    contents: buildStoryPrompt(input),
-    config: {
+async function generateStory(input) {
+  const body = {
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: buildStoryPrompt(input) }]
+      }
+    ],
+    generationConfig: {
       temperature: 0.95,
       responseMimeType: "application/json",
-      responseSchema: storySchema
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          title: { type: "STRING" },
+          styleGuide: { type: "STRING" },
+          characters: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                name: { type: "STRING" },
+                appearance: { type: "STRING" },
+                personality: { type: "STRING" }
+              },
+              required: ["name", "appearance", "personality"]
+            }
+          },
+          paragraphs: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                text: { type: "STRING" },
+                imagePrompt: { type: "STRING" }
+              },
+              required: ["text", "imagePrompt"]
+            }
+          }
+        },
+        required: ["title", "styleGuide", "characters", "paragraphs"]
+      }
     }
-  });
+  };
 
-  const parsed = JSON.parse(response.text || "{}");
-  if (!parsed.paragraphs || !parsed.paragraphs.length) {
-    throw new Error("Gemini returned an empty story.");
+  const data = await callGemini(STORY_MODEL, body);
+  const text = data?.candidates?.[0]?.content?.parts
+    ?.map(function (p) { return p.text || ""; })
+    .join("")
+    .trim();
+
+  if (!text) throw new Error("Gemini returned an empty story.");
+  const story = JSON.parse(text);
+
+  if (!Array.isArray(story.paragraphs) || !story.paragraphs.length) {
+    throw new Error("Gemini returned no story paragraphs.");
   }
-  return parsed;
+
+  return story;
 }
 
-function compactCharacterContext(characters) {
+function characterContext(characters) {
   return (characters || [])
     .map(function (c) {
       return c.name + ": " + c.appearance + ". Personality: " + c.personality + ".";
@@ -97,49 +130,46 @@ function compactCharacterContext(characters) {
     .join(" | ");
 }
 
-async function generateImageWithGemini(input) {
-  if (!ai) throw new Error("Gemini is not configured.");
-
-  const imagePrompt = [
-    "Create a single illustration for one storybook page.",
+async function generateImage(input) {
+  const prompt = [
+    "Create one polished children's storybook illustration.",
     "",
-    "Scene:",
-    input.prompt,
+    "Exact scene:",
+    input.imagePrompt,
     "",
-    "Visual style:",
+    "Consistent art direction:",
     input.styleGuide,
     "",
-    "Character continuity:",
+    "Recurring character reference:",
     input.characterContext,
     "",
-    "Rules:",
-    "- Keep recurring characters visually consistent.",
-    "- Match the supplied scene precisely.",
-    "- Child-friendly polished storybook illustration.",
-    "- No captions, speech bubbles, logos, or written text."
+    "Keep the recurring characters' appearance consistent.",
+    "Match the scene and emotion from the paragraph.",
+    "No captions, speech bubbles, logos, watermark-like text, or borders."
   ].join("\\n");
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3.1-flash-image",
-    contents: imagePrompt,
-    config: {
+  const body = {
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }]
+      }
+    ],
+    generationConfig: {
       responseModalities: ["TEXT", "IMAGE"]
     }
-  });
+  };
 
-  const parts = response.candidates && response.candidates[0] &&
-    response.candidates[0].content && response.candidates[0].content.parts
-    ? response.candidates[0].content.parts
-    : [];
-
+  const data = await callGemini(IMAGE_MODEL, body);
+  const parts = data?.candidates?.[0]?.content?.parts || [];
   const imagePart = parts.find(function (part) {
     return part.inlineData && part.inlineData.data;
   });
 
   if (!imagePart) throw new Error("Gemini did not return an image.");
 
-  const mimeType = imagePart.inlineData.mimeType || "image/png";
-  return "data:" + mimeType + ";base64," + imagePart.inlineData.data;
+  const mime = imagePart.inlineData.mimeType || "image/png";
+  return "data:" + mime + ";base64," + imagePart.inlineData.data;
 }
 
 app.get("/", function (req, res) {
@@ -147,64 +177,66 @@ app.get("/", function (req, res) {
 });
 
 app.get("/api/health", function (req, res) {
-  res.json({ ok: true, geminiConfigured: Boolean(GEMINI_API_KEY) });
+  res.json({
+    ok: true,
+    geminiConfigured: Boolean(GEMINI_API_KEY),
+    storyModel: STORY_MODEL,
+    imageModel: IMAGE_MODEL
+  });
 });
 
 app.post("/api/generate-story", async function (req, res) {
   try {
     const input = req.body || {};
+
     if (!input.character || !input.storyType || !input.ageGroup || !input.language) {
       return res.status(400).json({
         error: "character, storyType, ageGroup and language are required."
       });
     }
 
-    const story = await generateStoryWithGemini(input);
-    const characterContext = compactCharacterContext(story.characters);
+    const story = await generateStory(input);
+    const chars = characterContext(story.characters);
 
     const paragraphs = await Promise.all(
       story.paragraphs.map(async function (paragraph, index) {
-        try {
-          const image = await generateImageWithGemini({
-            prompt: paragraph.imagePrompt,
-            styleGuide: story.styleGuide,
-            characterContext: characterContext
-          });
+        let image = null;
 
-          return {
-            id: "p-" + (index + 1),
-            text: paragraph.text,
+        try {
+          image = await generateImage({
             imagePrompt: paragraph.imagePrompt,
-            image: image
-          };
-        } catch (imageError) {
-          console.error("Image generation failed:", imageError);
-          return {
-            id: "p-" + (index + 1),
-            text: paragraph.text,
-            imagePrompt: paragraph.imagePrompt,
-            image: null
-          };
+            styleGuide: story.styleGuide,
+            characterContext: chars
+          });
+        } catch (error) {
+          console.error("Image generation failed for paragraph " + (index + 1) + ":", error);
         }
+
+        return {
+          id: "p-" + (index + 1),
+          text: paragraph.text,
+          imagePrompt: paragraph.imagePrompt,
+          image
+        };
       })
     );
 
     res.json({
       title: story.title,
       styleGuide: story.styleGuide,
-      characters: story.characters,
-      paragraphs: paragraphs,
+      characters: story.characters || [],
+      paragraphs,
       story: paragraphs.map(function (p) { return p.text; }).join("\\n\\n")
     });
-  } catch (err) {
-    console.error("Gemini Story Error:", err);
+  } catch (error) {
+    console.error("StoryGenie Gemini Error:", error);
     res.status(500).json({
-      error: err && err.message ? err.message : "Story generation failed"
+      error: error?.message || "Story generation failed."
     });
   }
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, function () {
-  console.log("Server running on port " + PORT);
+  console.log("StoryGenie Gemini backend running on port " + PORT);
 });
